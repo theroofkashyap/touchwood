@@ -1,0 +1,7 @@
+build/
+captures/
+taps/
+.DS_Store
+.claude/
+# Original logo exports; the app uses the trimmed copies in Resources/
+/Frame *.svg
