@@ -47,6 +47,8 @@ Every launch opens on the welcome screen with the microphone off. It lists your 
 
 While teaching and checking, only the screen says where to tap: key LEDs light only when their spot counts, and the switches fade back. **back** returns to where setup started. On the live screen a press lights its key and its dot on the desk drawing, shows its name in dot-matrix type and runs its action. Click a key to choose what it does: the screen lists the six kinds (turn the dial or click one), with the details below and **try** to run it now; press the key again to finish. Deleting a preset is on the edit screen.
 
+To change a taught preset, press **edit**. Renaming the preset or a button, dragging a dot or removing a button changes no button's sound, so **save** keeps the remaining buttons' teaching and returns to where you started. A removed button's taught taps go with it. An added button needs teaching, which for now means teaching every button again; **save** stays hidden until then.
+
 **Actions:**
 
 - **Screenshot**: every display to the Desktop, the main display to the clipboard, or an area you pick. macOS asks to allow Screen Recording for Touchwood the first time; without it, the capture shows only the desktop background. Each rebuild has a new ad-hoc signature, so macOS may ask again.
