@@ -143,6 +143,8 @@ final class AppModel: ObservableObject {
     func removeButton(_ id: String) {
         guard setup.buttons.count > 2 else { return }
         setup.buttons.removeAll { $0.id == id }
+        // The others still sound the same, so their teaching stays; a button added later must not inherit these taps.
+        setup.taps.removeAll { $0.button == id }
         selected = setup.buttons.first?.id
     }
 
@@ -161,6 +163,22 @@ final class AppModel: ObservableObject {
         assigning = nil
         selected = selected.flatMap { id in setup.buttons.contains { $0.id == id } ? id : nil } ?? setup.buttons.first?.id
         screen = .buttons
+    }
+
+    /// Names, positions and removals change no button's sound, so a taught preset keeps its teaching.
+    var canSaveEdits: Bool { setup.isTaught }
+
+    /// Keeps the layout's edits without teaching again, and returns to where editing started.
+    func saveEdits() {
+        guard canSaveEdits else { return }
+        nameUnnamed()
+        persist()
+        prepare()
+        message = nil
+        headline = nil
+        picked = setup.id
+        screen = origin
+        if origin == .home { listen() }
     }
 
     /// Adds a button from the live screen; it needs teaching, so this opens the layout.
@@ -307,11 +325,16 @@ final class AppModel: ObservableObject {
 
     // MARK: Teaching, everyday noise, check
 
-    func startTeaching() {
-        leave()
+    /// A button left without a name is called by its letter.
+    private func nameUnnamed() {
         for i in setup.buttons.indices where setup.buttons[i].name.trimmingCharacters(in: .whitespaces).isEmpty {
             setup.buttons[i].name = setup.buttons[i].id
         }
+    }
+
+    func startTeaching() {
+        leave()
+        nameUnnamed()
         setup.taps = []
         setup.noise = []
         setup.check = nil

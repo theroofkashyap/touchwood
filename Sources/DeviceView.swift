@@ -219,7 +219,7 @@ struct DeviceView: View {
             return [FnSpec(label: "back", action: model.finishAssign), FnSpec(label: "teach"), FnSpec(label: "check"),
                     FnSpec(label: "edit", led: .on, action: model.finishAssign)]
         case .buttons:
-            return [FnSpec(label: "back", action: model.cancel), FnSpec(label: "teach", led: .blink, action: model.startTeaching),
+            return [FnSpec(label: "back", action: model.cancel), FnSpec(label: "teach", led: model.canSaveEdits ? .off : .blink, action: model.startTeaching),
                     FnSpec(label: "check"), FnSpec(label: "edit", led: .on)]
         case .teach, .noise:
             return [FnSpec(label: "back", action: model.cancel), FnSpec(label: "teach", led: .on), FnSpec(label: "check"), FnSpec(label: "edit")]
@@ -444,10 +444,13 @@ struct DeviceView: View {
                 }
             }
             HStack {
-                legend(["keys select", "teach to continue"])
+                legend(["keys select", model.canSaveEdits ? "save keeps the teaching" : "teach to continue"])
                 Spacer()
                 if model.library.presets.contains(where: { $0.id == model.setup.id }) {
                     Button("delete preset") { deleting = true }.buttonStyle(ScreenPill())
+                }
+                if model.canSaveEdits {
+                    Button("save") { model.saveEdits() }.buttonStyle(ScreenPill(on: true))
                 }
             }
         }
