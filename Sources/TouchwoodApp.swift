@@ -36,6 +36,9 @@ final class AppModel: ObservableObject {
     @Published var selected: String? // button selected while editing the layout
     @Published var actionsOn = true
     @Published var shortcutNames: [String] = []
+    @Published var recordingKeys = false // the next key press becomes the assigned button's keys
+    @Published var countdown: Int? // seconds until "try" presses the keys
+    @Published var tried: String? // what the last "try" did, or why it failed
     @Published var micName = ""
     @Published var requesting = false
     @Published var listening = false
@@ -67,6 +70,7 @@ final class AppModel: ObservableObject {
     private var lastSoft = -10.0 // last "too soft" hint
     private var redos = 0
     private var lastRun: [String: Date] = [:]
+    private var keyMonitor: Any?
     private var origin = Screen.welcome // where Cancel returns to from setup
     private var engine: AVAudioEngine?
     private var session: AudioSession?
@@ -277,26 +281,81 @@ final class AppModel: ObservableObject {
 
     func assign(_ id: String) {
         guard setup.buttons.contains(where: { $0.id == id }) else { return }
+        settle()
         assigning = id
         screen = .assign
         loadShortcuts()
     }
 
     func finishAssign() {
+        settle()
         assigning = nil
         screen = .home
     }
 
     func setAction(_ id: String, _ action: Action?) {
         guard let i = setup.buttons.firstIndex(where: { $0.id == id }) else { return }
+        settle()
         setup.buttons[i].action = action
         persist()
+    }
+
+    /// Stops recording keys and any "try" countdown, and clears what the last try said.
+    private func settle() {
+        if let keyMonitor { NSEvent.removeMonitor(keyMonitor) }
+        keyMonitor = nil
+        recordingKeys = false
+        countdown = nil
+        tried = nil
+    }
+
+    /// Takes the next key press, with its modifiers, as the keys the button being assigned presses. Esc alone cancels.
+    func recordKeys() {
+        guard let id = assigning else { return }
+        settle()
+        recordingKeys = true
+        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            guard let self else { return event }
+            if event.keyCode == 53, event.modifierFlags.intersection([.control, .option, .shift, .command]).isEmpty {
+                self.settle()
+            } else {
+                self.setAction(id, .keys(combo: KeyCombo(event)))
+            }
+            return nil // the press was the answer, so nothing else in the app sees it
+        }
+    }
+
+    /// "try" while assigning. Keys go to the app in front, so they wait three seconds for you to switch to it.
+    func tryAction(of id: String) {
+        guard let action = setup.buttons.first(where: { $0.id == id })?.action else { return }
+        if countdown != nil { return settle() }
+        tried = nil
+        guard case .keys(.some) = action else { return report(action) }
+        countdown = 3
+        countDown(action)
+    }
+
+    private func countDown(_ action: Action) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
+            guard let self, let left = self.countdown else { return }
+            guard left == 1 else {
+                self.countdown = left - 1
+                return self.countDown(action)
+            }
+            self.countdown = nil
+            self.report(action)
+        }
+    }
+
+    private func report(_ action: Action) {
+        let done = action.summary.lowercased()
+        action.run { failure in DispatchQueue.main.async { [weak self] in self?.tried = failure?.lowercased() ?? done } }
     }
 
     /// The dial while assigning: one detent per kind of action.
     func dialKind(_ value: Double) {
         guard let id = assigning else { return }
-        let kind = Action.Kind.allCases[Int((min(1, max(0, value)) * 5).rounded())]
+        let kind = Action.Kind.allCases[Int((min(1, max(0, value)) * Double(Action.Kind.allCases.count - 1)).rounded())]
         let current = setup.buttons.first { $0.id == id }?.action?.kind ?? .nothing
         if kind != current { setAction(id, Action.blank(kind)) }
     }

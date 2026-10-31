@@ -107,7 +107,7 @@ struct DeviceView: View {
         if model.screen == .assign, let id = model.assigning {
             let kind = model.setup.buttons.first { $0.id == id }?.action?.kind ?? .nothing
             let index = Action.Kind.allCases.firstIndex(of: kind) ?? 0
-            Dial(label: "dial", value: Double(index) / 5, readout: "\(index + 1)") { value, _ in model.dialKind(value) }
+            Dial(label: "dial", value: Double(index) / Double(Action.Kind.allCases.count - 1), readout: "\(index + 1)") { value, _ in model.dialKind(value) }
         } else {
             Dial(label: "sens", value: model.setup.sensitivity, readout: "\(Int((model.setup.sensitivity * 10).rounded()))",
                  enabled: model.screen != .welcome && model.screen != .done) { value, final in
@@ -346,7 +346,11 @@ struct DeviceView: View {
             let button = model.setup.buttons[index]
             let kind = button.action?.kind ?? .nothing
             VStack(alignment: .leading, spacing: 14) {
-                topLine("edit · button \(id.lowercased())", "turn the dial · press \(id.lowercased()) to finish")
+                if let tried = model.tried {
+                    Text(tried).font(mono(11)).foregroundStyle(Palette.lcd).lineLimit(1)
+                } else {
+                    topLine("edit · button \(id.lowercased())", "turn the dial · press \(id.lowercased()) to finish")
+                }
                 HStack(alignment: .top, spacing: 24) {
                     VStack(alignment: .leading, spacing: 8) {
                         DotText(text: id, pitch: 13, color: Palette.orange)
@@ -359,6 +363,7 @@ struct DeviceView: View {
                                 guard option != kind else { return }
                                 model.setAction(id, Action.blank(option))
                                 if option == .app || option == .file { DispatchQueue.main.async { model.choose(option, for: id) } }
+                                if option == .keys { model.recordKeys() }
                             } label: {
                                 HStack {
                                     Text(option.label)
@@ -380,7 +385,7 @@ struct DeviceView: View {
                     actionDetail(id, button.action)
                     Spacer(minLength: 0)
                     if button.action != nil {
-                        Button("try") { model.runAction(of: id) }.buttonStyle(ScreenPill())
+                        Button(model.countdown == nil ? "try" : "cancel") { model.tryAction(of: id) }.buttonStyle(ScreenPill())
                     }
                 }
             }
@@ -407,7 +412,7 @@ struct DeviceView: View {
                 .textFieldStyle(.plain).font(mono(13)).foregroundStyle(Palette.lcd).frame(width: 250)
                 .overlay(alignment: .bottom) { Rectangle().fill(Palette.lcdFaint).frame(height: 1).offset(y: 4) }
         case .shortcut(let name):
-            label("shortcut")
+            label("from shortcuts app")
             if model.shortcutNames.isEmpty && name.isEmpty {
                 Text("none found in shortcuts").font(mono(13)).foregroundStyle(Palette.lcdMid)
             } else {
@@ -417,6 +422,16 @@ struct DeviceView: View {
                     Text(name.isEmpty ? "choose…" : name.lowercased()).font(mono(13))
                 }
                 .menuStyle(.borderlessButton).fixedSize()
+            }
+        case .keys(let combo):
+            label("keys")
+            if model.recordingKeys {
+                Text("press them now · esc cancels").font(mono(13)).foregroundStyle(Palette.orange)
+            } else if let left = model.countdown {
+                Text("switch to the app · pressing in \(left)").font(mono(13)).foregroundStyle(Palette.orange)
+            } else {
+                Text(combo?.label ?? "none set").font(mono(13)).foregroundStyle(combo == nil ? Palette.lcdMid : Palette.lcd)
+                Button(combo == nil ? "record" : "change") { model.recordKeys() }.buttonStyle(ScreenPill())
             }
         }
     }
