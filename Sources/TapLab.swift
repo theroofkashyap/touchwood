@@ -99,11 +99,14 @@ enum WAV {
     }
 }
 
-/// How one tap sounds with loudness removed: energy in 24 bands from 150 Hz up,
-/// relative to their average, plus how fast the sound dies away.
-func soundShape(_ x: [Float], rate: Double) -> [Double] {
+/// Where a tap starts: 2 ms before it first reaches 30% of its peak.
+func tapOnset(_ x: [Float], rate: Double) -> Int {
     let peak = x.map { abs($0) }.max() ?? 0
-    let onset = max(0, (x.firstIndex { abs($0) >= peak * 0.3 } ?? 0) - Int(0.002 * rate))
+    return max(0, (x.firstIndex { abs($0) >= peak * 0.3 } ?? 0) - Int(0.002 * rate))
+}
+
+/// Power in each FFT bin over the 85 ms from `onset`.
+func tapSpectrum(_ x: [Float], from onset: Int, rate: Double) -> (power: [Float], binHz: Double) {
     let log2n = Int(log2(0.085 * rate).rounded())
     let n = 1 << log2n
     // Keep the attack whole and fade the tail, so the frame's end adds no false ring.
@@ -123,7 +126,15 @@ func soundShape(_ x: [Float], rate: Double) -> [Double] {
             vDSP_zvmags(&split, 1, &power, 1, vDSP_Length(n / 2))
         }
     }
-    let low = 150.0, high = min(16_000, rate * 0.45), binHz = rate / Double(n)
+    return (power, rate / Double(n))
+}
+
+/// How one tap sounds with loudness removed: energy in 24 bands from 150 Hz up,
+/// relative to their average, plus how fast the sound dies away.
+func soundShape(_ x: [Float], rate: Double) -> [Double] {
+    let onset = tapOnset(x, rate: rate)
+    let (power, binHz) = tapSpectrum(x, from: onset, rate: rate)
+    let low = 150.0, high = min(16_000, rate * 0.45)
     func bin(_ band: Int) -> Int { Int(low * pow(high / low, Double(band) / 24) / binHz) }
     let bands = (0..<24).map { b in log10(power[bin(b)..<max(bin(b) + 1, bin(b + 1))].reduce(0.0) { $0 + Double($1) } + 1e-12) }
     let average = bands.reduce(0, +) / 24
@@ -131,6 +142,61 @@ func soundShape(_ x: [Float], rate: Double) -> [Double] {
         x[min(x.count, onset + Int(from * rate))..<min(x.count, onset + Int(to * rate))].reduce(0.0) { $0 + Double($1) * Double($1) }
     }
     return bands.map { $0 - average } + [log10((energy(0.015, 0.08) + 1e-12) / (energy(0, 0.015) + 1e-12))]
+}
+
+/// Where a tap's strongest resonances sit, in octaves above 150 Hz: up to 5 peaks, each the loudest point
+/// within a semitone either side and at most 30 dB below the strongest. Like a tuner's pitch, each is placed
+/// between FFT bins by a parabola through its neighbours. Unlike band energies, these barely move with force.
+func resonances(_ x: [Float], rate: Double) -> [Double] {
+    let (power, binHz) = tapSpectrum(x, from: tapOnset(x, rate: rate), rate: rate)
+    let low = 150.0, high = min(16_000, rate * 0.45)
+    let level = power.map { 10 * log10(Double($0) + 1e-12) }
+    var peaks: [(octave: Double, level: Double)] = []
+    for i in max(1, Int(low / binHz))...min(level.count - 2, Int(high / binHz)) {
+        let reach = max(1, Int(Double(i) * (pow(2, 1.0 / 12) - 1)))
+        guard level[max(0, i - reach)...min(level.count - 1, i + reach)].allSatisfy({ $0 <= level[i] }) else { continue }
+        let (a, b, c) = (level[i - 1], level[i], level[i + 1])
+        let shift = a - 2 * b + c < 0 ? min(0.5, max(-0.5, 0.5 * (a - c) / (a - 2 * b + c))) : 0
+        peaks.append((log2((Double(i) + shift) * binHz / low), b - 0.25 * (a - c) * shift))
+    }
+    let top = peaks.map(\.level).max() ?? 0
+    return peaks.filter { $0.level >= top - 30 }.sorted { $0.level > $1.level }.prefix(5).map(\.octave)
+}
+
+/// How far apart two taps' resonances sit, in semitones: each peak to the nearest peak of the other tap,
+/// averaged both ways. Capped at 2 semitones a peak, so a peak only one of them has can't dominate.
+func resonanceDistance(_ a: [Double], _ b: [Double]) -> Double {
+    func oneWay(_ from: [Double], _ to: [Double]) -> Double {
+        from.reduce(0.0) { sum, p in sum + min(2, 12 * (to.map { abs($0 - p) }.min() ?? 1)) } / Double(max(1, from.count))
+    }
+    return (oneWay(a, b) + oneWay(b, a)) / 2
+}
+
+/// A tap's first 30 ms from its onset at unit energy, so loudness drops out, with 2 ms either side
+/// to slide another tap against, since the onset can land a little early or late.
+struct Waveform {
+    static let length = 0.03, slack = 0.002
+    let core: [Float]
+    private let padded: [Float]
+    private let norms: [Float] // root energy of `padded` under the core at each lag
+
+    init(_ x: [Float], rate: Double) {
+        let onset = tapOnset(x, rate: rate), n = Int(Self.length * rate), s = Int(Self.slack * rate)
+        let raw = (onset - s..<onset + n + s).map { $0 >= 0 && $0 < x.count ? x[$0] : 0 }
+        let scale = 1 / (sqrt(raw[s..<s + n].reduce(0) { $0 + $1 * $1 }) + 1e-9)
+        let padded = raw.map { $0 * scale }
+        self.padded = padded
+        core = Array(padded[s..<s + n])
+        norms = (0...2 * s).map { k in sqrt(padded[k..<k + n].reduce(0) { $0 + $1 * $1 }) + 1e-9 }
+    }
+
+    /// The best normalized cross-correlation of `other` against this tap at any lag in the slack; 1 is the same shape.
+    /// Both must come from clips at the same sample rate.
+    func match(_ other: Waveform) -> Double {
+        var out = [Float](repeating: 0, count: norms.count)
+        vDSP_conv(padded, 1, other.core, 1, &out, 1, vDSP_Length(norms.count), vDSP_Length(other.core.count))
+        return Double(zip(out, norms).map { $0 / $1 }.max()!)
+    }
 }
 
 /// Peak level of a clip in dB below full scale.
@@ -227,6 +293,30 @@ func leaveOneOut(_ taps: [(label: String, features: [Double])]) -> [String] {
     taps.indices.map { i in SpotModel(taps.indices.filter { $0 != i }.map { taps[$0] }).nearest(taps[i].features) }
 }
 
+/// Guesses each tap's spot from all the other taps: the spot whose taps are nearest on average.
+func leaveOneOut(labels: [String], distance: [[Double]]) -> [String] {
+    let spots = Set(labels).sorted()
+    return labels.indices.map { i in
+        spots.map { spot -> (spot: String, average: Double) in
+            let others = labels.indices.filter { $0 != i && labels[$0] == spot }
+            return (spot, others.reduce(0.0) { $0 + distance[i][$1] } / Double(max(1, others.count)))
+        }.min { $0.average < $1.average }!.spot
+    }
+}
+
+/// Leave-one-out scores for two ways of describing a tap borrowed from pitch tuners.
+/// Every clip must have the same sample rate.
+func tunerScores(_ taps: [(label: String, samples: [Float])], rate: Double) -> (resonances: Double, waveform: Double) {
+    let labels = taps.map(\.label)
+    let peaks = taps.map { resonances($0.samples, rate: rate) }
+    let waves = taps.map { Waveform($0.samples, rate: rate) }
+    func score(_ distance: (Int, Int) -> Double) -> Double {
+        let guesses = leaveOneOut(labels: labels, distance: taps.indices.map { i in taps.indices.map { distance(i, $0) } })
+        return Double(zip(labels, guesses).filter { $0.0 == $0.1 }.count) / Double(labels.count)
+    }
+    return (score { resonanceDistance(peaks[$0], peaks[$1]) }, score { 1 - waves[$0].match(waves[$1]) })
+}
+
 enum Verdict { case clear, partial, notSeparable, unclear }
 
 /// Leave-one-out scores for labeled taps, shared by the command-line report and the app.
@@ -274,6 +364,7 @@ struct SpotReport {
 func analyze(folder: URL) -> Bool {
     let files = FileManager.default
     var taps: [(label: String, shape: [Double], peak: Double)] = []
+    var clips: [(label: String, samples: [Float])] = []
     var rates = Set<Int>(), channels = 1
     for spot in ((try? files.contentsOfDirectory(atPath: folder.path)) ?? []).sorted() {
         let dir = folder.appendingPathComponent(spot)
@@ -281,6 +372,7 @@ func analyze(folder: URL) -> Bool {
             do {
                 let clip = try WAV.read(dir.appendingPathComponent(name))
                 taps.append((spot, soundShape(clip.channels[0], rate: clip.rate), peakLevel(clip.channels[0])))
+                clips.append((spot, clip.channels[0]))
                 rates.insert(Int(clip.rate))
                 channels = max(channels, clip.channels.count)
             } catch {
@@ -306,6 +398,19 @@ func analyze(folder: URL) -> Bool {
     }
     let levels = spots.map { "\($0) \(Int(report.averagePeak($0).rounded())) dBFS" }
     print("\nLoudness alone: \(percent(report.loudScore)) guessed right (average peak: \(levels.joined(separator: ", ")))\n")
+    if rates.count == 1 {
+        let tuner = tunerScores(clips, rate: Double(rates.first!))
+        print("The same test with two ideas from pitch tuners:")
+        for (name, score, note) in [("sound shape", report.shapeScore, "24 band energies and the decay, as above; what the app uses"),
+                                    ("resonance peaks", tuner.resonances, "where the 5 strongest peaks sit; barely moves with force"),
+                                    ("waveform match", tuner.waveform, "the first 30 ms lined up against each spot's other taps")] {
+            let value = percent(score)
+            print("  " + name.padding(toLength: 17, withPad: " ", startingAt: 0) + String(repeating: " ", count: 4 - value.count) + value + "  " + note)
+        }
+        print()
+    } else {
+        print("Resonance peaks and waveform match skipped: the clips have different sample rates.\n")
+    }
     switch report.verdict {
     case .unclear:
         print("Verdict: unclear. Loudness alone tells these spots apart about as well, so this may be how hard you tapped rather than where. Record again, tapping soft and firm at every spot.")
@@ -354,14 +459,17 @@ func selfTestTapLab() {
 
     // A tap rings at its spot's pitch and dies away; force and room noise vary.
     var random = SplitMix(state: 7)
-    func tap(_ pitch: Double, _ decay: Double, force: ClosedRange<Double> = 0.05...0.5) -> (shape: [Double], peak: Double) {
+    func clip(_ pitch: Double, _ decay: Double, force: ClosedRange<Double> = 0.05...0.5) -> [Float] {
         let strength = Double.random(in: force, using: &random)
         let ring = pitch * Double.random(in: 0.95...1.05, using: &random)
-        let x = (0..<Int(0.15 * rate)).map { i -> Float in
+        return (0..<Int(0.15 * rate)).map { i -> Float in
             let t = Double(i) / rate - 0.02
             let sound = t < 0 ? 0 : strength * exp(-t / decay) * sin(2 * .pi * ring * t)
             return Float(sound + Double.random(in: -0.002...0.002, using: &random))
         }
+    }
+    func tap(_ pitch: Double, _ decay: Double, force: ClosedRange<Double> = 0.05...0.5) -> (shape: [Double], peak: Double) {
+        let x = clip(pitch, decay, force: force)
         return (soundShape(x, rate: rate), peakLevel(x))
     }
     func taps(_ spots: [(label: String, pitch: Double, decay: Double, force: ClosedRange<Double>)], each: Int) -> [(label: String, shape: [Double], peak: Double)] {
@@ -386,6 +494,25 @@ func selfTestTapLab() {
     precondition(ringing.filter { model.guess($0) == .button("a") }.count >= 15)
     precondition(ringing.filter { typing.guess($0) == .notButton }.count >= 12)
     precondition((0..<20).filter { _ in typing.guess(tap(700, 0.008).shape) == .button("a") }.count >= 12)
+
+    // Resonance peaks land between FFT bins (11.7 Hz apart here) and ignore force;
+    // waveform match ignores loudness and where in the clip the tap starts.
+    func ring(_ pitch: Double, strength: Double, delay: Double = 0.02) -> [Float] {
+        (0..<Int(0.15 * rate)).map { i in
+            let t = Double(i) / rate - delay
+            return Float(t < 0 ? 0 : strength * exp(-t / 0.008) * sin(2 * .pi * pitch * t))
+        }
+    }
+    let soft = resonances(ring(709, strength: 0.05), rate: rate)
+    precondition(abs(150 * pow(2, soft[0]) - 709) < 3)
+    precondition(resonanceDistance(soft, resonances(ring(709, strength: 0.5), rate: rate)) < 0.01)
+    let quiet = Waveform(ring(709, strength: 0.05), rate: rate)
+    precondition(quiet.match(Waveform(ring(709, strength: 0.5, delay: 0.031), rate: rate)) > 0.99)
+    precondition(quiet.match(Waveform(ring(2400, strength: 0.05), rate: rate)) < 0.5)
+    let far = tunerScores((0..<12).flatMap { _ in [(label: "a", samples: clip(700, 0.008)), (label: "b", samples: clip(2400, 0.004))] }, rate: rate)
+    precondition(far.resonances >= 0.9 && far.waveform >= 0.9)
+    let same = tunerScores((0..<12).flatMap { _ in [(label: "a", samples: clip(700, 0.008)), (label: "b", samples: clip(700, 0.008))] }, rate: rate)
+    precondition(same.resonances <= 0.75 && same.waveform <= 0.75)
 
     var presser = Presser(double: true)
     precondition(presser.feed(.button("a"), at: 1) == nil && presser.feed(.button("a"), at: 1.25) == "a")

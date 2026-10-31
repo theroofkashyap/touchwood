@@ -34,7 +34,7 @@ The window is drawn as one device: a small black screen, four big keys, a row of
 
 - **The four big keys** are your desk buttons, a to d. A key's LED lights when its spot is pressed and blinks while it waits for the second tap of a double tap. On the welcome and done screens they are soft keys, labelled on the screen.
 - **Function keys**: preset (back to the welcome screen), teach (retrain this preset), check, edit (names and positions). During setup the first one reads back.
-- **Dial**: sensitivity, 0 to 10, saved per preset. 5 is the detector's usual 6× the room noise; higher hears softer taps. Drag it up or down. While choosing an action it steps through the six kinds instead.
+- **Dial**: sensitivity, 0 to 10, saved per preset. 5 is the detector's usual 6× the room noise; higher hears softer taps. Drag it up or down. While choosing an action it steps through the seven kinds instead.
 - **Switches**: press with one tap or two, and actions off or on.
 
 Every launch opens on the welcome screen with the microphone off. It lists your presets; click one or press **d next**, then **a use** (start listening), **b retrain** (teach the same buttons again for a room that sounds different today; names, positions and actions stay) or **c new**. It warns when a preset was taught with a different microphone. A first launch has one key, **start**. Setup runs:
@@ -45,7 +45,7 @@ Every launch opens on the welcome screen with the microphone off. It lists your 
 4. **Check.** Press 8 prompted buttons for real, with the chosen gesture, shown the same way on the desk drawing: correct, read as another button, or missed.
 5. **Done.** The check result, how many everyday sounds would have pressed a button (each judged by a recognizer that never heard it), how far apart the buttons sound, and a note. **a save**, **b check again**, **c retrain**, **d discard**.
 
-While teaching and checking, only the screen says where to tap: key LEDs light only when their spot counts, and the switches fade back. **back** returns to where setup started. On the live screen a press lights its key and its dot on the desk drawing, shows its name in dot-matrix type and runs its action. Click a key to choose what it does: the screen lists the six kinds (turn the dial or click one), with the details below and **try** to run it now; press the key again to finish. Deleting a preset is on the edit screen.
+While teaching and checking, only the screen says where to tap: key LEDs light only when their spot counts, and the switches fade back. **back** returns to where setup started. On the live screen a press lights its key and its dot on the desk drawing, shows its name in dot-matrix type and runs its action. Click a key to choose what it does: the screen lists the seven kinds (turn the dial or click one), with the details below and **try** to run it now; press the key again to finish. Deleting a preset is on the edit screen.
 
 To change a taught preset, press **edit**. Renaming the preset or a button, dragging a dot or removing a button changes no button's sound, so **save** keeps the remaining buttons' teaching and returns to where you started. A removed button's taught taps go with it. An added button needs teaching, which for now means teaching every button again; **save** stays hidden until then.
 
@@ -53,7 +53,8 @@ To change a taught preset, press **edit**. Renaming the preset or a button, drag
 
 - **Screenshot**: every display to the Desktop, the main display to the clipboard, or an area you pick. macOS asks to allow Screen Recording for Touchwood the first time; without it, the capture shows only the desktop background. Each rebuild has a new ad-hoc signature, so macOS may ask again.
 - **Open app**, **website** (https:// is added when left out) or **file or folder**.
-- **Shortcut** from the Shortcuts app, which covers nearly anything else: music, focus modes, messages, home devices.
+- **Shortcuts app**: runs one of your shortcuts from Apple's Shortcuts app, which covers nearly anything else: music, focus modes, messages, home devices.
+- **Press keys**: sends a key combination, such as ⌘ return or →, to the app in front. Click **record** (picking the kind starts it) and press the keys; esc alone cancels. On a Mac keyboard fn with an arrow is home, end, page up or page down, so fn ⌃ → shows as ⌃ end (fn →), and it is sent back exactly as pressed. macOS asks to allow Touchwood under Privacy & Security → Accessibility the first time; until then nothing is pressed. Keys are never sent while Touchwood itself is in front, so **try** counts down three seconds for you to switch to the app. Many apps send a message on ⌘ return, so think twice before putting it on a button while recognition can still take an everyday sound for a press.
 
 An action runs at most once a second per button, so a habit double tap in single-tap mode doesn't fire it twice. Actions run only on the live screen, never while editing, teaching or checking. A tap is refused as "not a button" when it is far from every button, or closer to an everyday sound than to any taught tap; it reads "?" when two buttons are nearly tied. Sounds more than 6 dB quieter than the softest taught tap are ignored.
 
@@ -90,7 +91,7 @@ sh build.sh
 
 Pick spots far apart, such as left and right of the laptop. Stay quiet for three seconds, then tap once wherever each prompt says, mixing soft and firm taps at every spot. Prompts come in random order, 15 per spot (`--taps N` changes that), so drift in the room never lines up with one spot. A second tap within 0.8 seconds is ignored. Each tap is saved as a 150 ms WAV clip in `taps/<spot>/`, which QuickTime plays; all input channels are kept. The analysis runs after the last tap, and `./build/touchwood --analyze` reruns it. Recording again adds to the same folders; delete `taps/` to start over. Clips never leave this Mac.
 
-The analysis guesses each tap's spot from the average of all the other taps ("leave-one-out"). It compares sound shape with loudness removed: energy in 24 frequency bands from 150 Hz up, plus how fast the sound dies away. It prints the share guessed right, a table of mix-ups, and the same score from loudness alone. Over 90% means live zone guessing is worth building. If loudness alone does about as well, the verdict is "unclear": quiet taps carry more room noise, so tapping harder at one spot can fake a difference. Scores below chance mean no difference; leave-one-out dips under chance when spots are alike. The self-test checks this pipeline on synthetic taps only, not on a real desk.
+The analysis guesses each tap's spot from the average of all the other taps ("leave-one-out"). It compares sound shape with loudness removed: energy in 24 frequency bands from 150 Hz up, plus how fast the sound dies away. It prints the share guessed right, a table of mix-ups, and the same score from loudness alone. Over 90% means live zone guessing is worth building. If loudness alone does about as well, the verdict is "unclear": quiet taps carry more room noise, so tapping harder at one spot can fake a difference. Scores below chance mean no difference; leave-one-out dips under chance when spots are alike. It then scores the same test two more ways, borrowed from pitch tuners. Resonance peaks: where each tap's 5 strongest peaks sit, placed between FFT bins the way a tuner places a pitch; these barely move with tap force, but can't tell apart spots that ring at the same frequencies with different strengths. Waveform match: each tap's first 30 ms lined up against the other taps, which keeps the timing the bands throw away. The app uses neither yet; they show whether either beats the sound shape on your desk. The self-test checks this pipeline on synthetic taps only, not on a real desk.
 
 ## What it measures
 
@@ -102,7 +103,7 @@ This is a baseline heuristic: typing, claps, music, or objects striking the desk
 
 - **Recognition.** Spots are told apart by the shape of their sound alone, from one microphone channel; there is no way to measure position. Spots on the same surface close together sound alike, and a desk, a room or even the day's noise can change how well it works. Retrain when it starts missing.
 - **Only while the window is open.** Touchwood listens on the live screen and stops when you close it; there is no menu bar or background mode yet.
-- **No signed download.** The build is signed ad hoc on your Mac, so macOS may ask for microphone and Screen Recording access again after each rebuild.
+- **No signed download.** The build is signed ad hoc on your Mac, so macOS may ask for microphone, Screen Recording and Accessibility access again after each rebuild.
 
 Better recognition is the main work ahead. If Touchwood misreads your desk, an issue with your Mac model, what the desk is made of and what went wrong helps a lot.
 

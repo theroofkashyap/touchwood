@@ -31,6 +31,33 @@ extension Action {
         case .shortcut(let name):
             guard !name.isEmpty else { return done("No Shortcut chosen for this button.") }
             Self.launch("/usr/bin/shortcuts", ["run", name], done)
+        case .keys(let combo):
+            guard let combo else { return done("No keys set for this button.") }
+            // Posting key events needs Accessibility; the option has macOS show its prompt when it's missing.
+            guard AXIsProcessTrustedWithOptions(["AXTrustedCheckOptionPrompt": true] as CFDictionary) else {
+                return done("Allow Touchwood in Privacy & Security → Accessibility, then try again.")
+            }
+            guard NSWorkspace.shared.frontmostApplication?.processIdentifier != ProcessInfo.processInfo.processIdentifier else {
+                return done("Touchwood is in front. Keys go to the app in front, so switch to it first.")
+            }
+            Self.press(combo)
+            done(nil)
+        }
+    }
+
+    private static func press(_ combo: KeyCombo) {
+        var flags = CGEventFlags()
+        if combo.control { flags.insert(.maskControl) }
+        if combo.option { flags.insert(.maskAlternate) }
+        if combo.shift { flags.insert(.maskShift) }
+        if combo.command { flags.insert(.maskCommand) }
+        if combo.fn { flags.insert(.maskSecondaryFn) }
+        if combo.keypad { flags.insert(.maskNumericPad) }
+        let source = CGEventSource(stateID: .hidSystemState)
+        for down in [true, false] {
+            let event = CGEvent(keyboardEventSource: source, virtualKey: combo.code, keyDown: down)
+            event?.flags = flags
+            event?.post(tap: .cghidEventTap)
         }
     }
 
@@ -59,5 +86,23 @@ extension Action {
             let names = output.split(separator: "\n").map(String.init).filter { seen.insert($0).inserted }
             DispatchQueue.main.async { done(names) }
         }
+    }
+}
+
+extension KeyCombo {
+    private static let names: [UInt16: String] = [
+        36: "return", 76: "enter", 48: "tab", 49: "space", 51: "delete", 117: "forward delete", 53: "esc",
+        123: "←", 124: "→", 125: "↓", 126: "↑",
+        115: "home (fn ←)", 119: "end (fn →)", 116: "page up (fn ↑)", 121: "page down (fn ↓)",
+        122: "f1", 120: "f2", 99: "f3", 118: "f4", 96: "f5", 97: "f6", 98: "f7", 100: "f8", 101: "f9", 109: "f10", 103: "f11", 111: "f12",
+    ]
+
+    /// The combo a key press makes, with the key named as it reads unshifted on this keyboard layout.
+    init(_ event: NSEvent) {
+        let flags = event.modifierFlags
+        let typed = event.characters(byApplyingModifiers: [])?.lowercased() ?? ""
+        self.init(code: event.keyCode, key: Self.names[event.keyCode] ?? (typed.isEmpty ? "key \(event.keyCode)" : typed),
+                  control: flags.contains(.control), option: flags.contains(.option), shift: flags.contains(.shift), command: flags.contains(.command),
+                  fn: flags.contains(.function), keypad: flags.contains(.numericPad))
     }
 }

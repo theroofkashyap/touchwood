@@ -74,7 +74,7 @@ enum Action: Codable, Equatable {
     }
 
     enum Kind: String, CaseIterable, Identifiable {
-        case nothing, screenshot, app, website, file, shortcut
+        case nothing, screenshot, app, website, file, shortcut, keys
         var id: String { rawValue }
         /// Lowercase, as printed on the device screen.
         var label: String {
@@ -84,7 +84,8 @@ enum Action: Codable, Equatable {
             case .app: return "open app"
             case .website: return "website"
             case .file: return "file or folder"
-            case .shortcut: return "shortcut"
+            case .shortcut: return "shortcuts app"
+            case .keys: return "press keys"
             }
         }
 
@@ -96,6 +97,7 @@ enum Action: Codable, Equatable {
             case .website: return "Open a website"
             case .file: return "Open a file or folder"
             case .shortcut: return "Run a Shortcut"
+            case .keys: return "Press keys"
             }
         }
     }
@@ -105,6 +107,7 @@ enum Action: Codable, Equatable {
     case website(url: String)
     case file(path: String)
     case shortcut(name: String)
+    case keys(combo: KeyCombo?) // nil until recorded
 
     var kind: Kind {
         switch self {
@@ -113,6 +116,7 @@ enum Action: Codable, Equatable {
         case .website: return .website
         case .file: return .file
         case .shortcut: return .shortcut
+        case .keys: return .keys
         }
     }
 
@@ -125,6 +129,7 @@ enum Action: Codable, Equatable {
         case .website: return .website(url: "")
         case .file: return .file(path: "")
         case .shortcut: return .shortcut(name: "")
+        case .keys: return .keys(combo: nil)
         }
     }
 
@@ -138,6 +143,7 @@ enum Action: Codable, Equatable {
         case .website(let url): return Self.webURL(url)?.host.map { "Opens \($0)" } ?? "No website set"
         case .file(let path): return path.isEmpty ? "Nothing chosen" : "Opens \(Self.displayName(path))"
         case .shortcut(let name): return name.isEmpty ? "No Shortcut chosen" : "Runs \(name)"
+        case .keys(let combo): return combo.map { "Presses \($0.label)" } ?? "No keys set"
         }
     }
 
@@ -148,6 +154,7 @@ enum Action: Codable, Equatable {
         case .app(let path), .file(let path): return path.isEmpty ? "choose…" : Self.displayName(path).lowercased()
         case .website(let url): return Self.webURL(url)?.host?.lowercased() ?? "no address"
         case .shortcut(let name): return name.isEmpty ? "choose…" : name.lowercased()
+        case .keys(let combo): return combo?.label ?? "record…"
         }
     }
 
@@ -161,6 +168,33 @@ enum Action: Codable, Equatable {
         let text = text.trimmingCharacters(in: .whitespaces)
         guard !text.isEmpty, let url = URL(string: text.contains("://") ? text : "https://" + text), url.host != nil else { return nil }
         return url
+    }
+}
+
+/// A key and the modifiers held with it, sent to the app in front.
+struct KeyCombo: Codable, Equatable {
+    var code: UInt16 // macOS virtual key code
+    var key: String // what the key is called, lowercase: "return", "k"
+    var control = false, option = false, shift = false, command = false
+    // macOS marks arrows, home, end, page up and down and F-keys as fn and keypad keys; menus match on it,
+    // so these are sent back exactly as recorded. On a Mac keyboard fn with an arrow is home, end, page up or down.
+    var fn = false, keypad = false
+
+    /// "⌘ return", with the modifiers in the order macOS menus show them.
+    var label: String {
+        let held = (control ? "⌃" : "") + (option ? "⌥" : "") + (shift ? "⇧" : "") + (command ? "⌘" : "")
+        return held.isEmpty ? key : "\(held) \(key)"
+    }
+}
+
+extension KeyCombo {
+    // Combos saved before fn and keypad were kept have neither.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(code: try c.decode(UInt16.self, forKey: .code), key: try c.decode(String.self, forKey: .key),
+                  control: try c.decode(Bool.self, forKey: .control), option: try c.decode(Bool.self, forKey: .option),
+                  shift: try c.decode(Bool.self, forKey: .shift), command: try c.decode(Bool.self, forKey: .command),
+                  fn: try c.decodeIfPresent(Bool.self, forKey: .fn) ?? false, keypad: try c.decodeIfPresent(Bool.self, forKey: .keypad) ?? false)
     }
 }
 
@@ -204,6 +238,17 @@ func selfTestSetup() {
     setup.buttons[1].action = .screenshot(.clipboard)
     let back = try! JSONDecoder().decode(Library.self, from: JSONEncoder().encode(Library(presets: [setup], active: setup.id)))
     precondition(back.current?.id == setup.id && back.current?.buttons.map(\.action) == setup.buttons.map(\.action))
+    let send = KeyCombo(code: 36, key: "return", shift: true, command: true)
+    setup.buttons[0].action = .keys(combo: send)
+    setup.buttons[1].action = .keys(combo: nil)
+    let keys = try! JSONDecoder().decode(Setup.self, from: JSONEncoder().encode(setup))
+    precondition(keys.buttons.map(\.action) == [.keys(combo: send), .keys(combo: nil)])
+    precondition(send.label == "⇧⌘ return" && Action.keys(combo: send).summary == "Presses ⇧⌘ return" && Action.keys(combo: nil).short == "record…")
+    precondition(KeyCombo(code: 124, key: "→").label == "→")
+    let older = try! JSONDecoder().decode(KeyCombo.self, from: Data(#"{"code":119,"control":true,"shift":false,"command":false,"key":"end","option":false}"#.utf8))
+    precondition(older == KeyCombo(code: 119, key: "end", control: true) && !older.fn)
+    let tile = KeyCombo(code: 119, key: "end (fn →)", control: true, fn: true, keypad: true)
+    precondition(try! JSONDecoder().decode(KeyCombo.self, from: JSONEncoder().encode(tile)) == tile && tile.label == "⌃ end (fn →)")
     precondition(Action.webURL("example.com")?.absoluteString == "https://example.com")
     precondition(Action.webURL("  ") == nil && Action.webURL("http://x.org/a")?.absoluteString == "http://x.org/a")
     precondition(Action.website(url: "news.ycombinator.com/item").summary == "Opens news.ycombinator.com")
