@@ -19,7 +19,7 @@ if CommandLine.arguments.contains("--self-test") {
     precondition(run([350...351, 375...376, 400...401, 425...426]) == 1)
     selfTestTapLab()
     selfTestSetup()
-    print("Passed: silence, single tap, double tap, sustained noise, slow pair, cooldown, clip cutting, WAV round trip, spot scoring, live guessing, noise refusal, presses, saved presets and actions.")
+    print("Passed: silence, single tap, double tap, sustained noise, slow pair, cooldown, clip cutting, WAV round trip, spot scoring, resonance peaks, waveform match, live guessing, noise refusal, presses, saved presets and actions.")
     exit(0)
 }
 
